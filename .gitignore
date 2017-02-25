@@ -1,0 +1,7 @@
+*~
+*.swp
+*.nc
+data.txt
+data.nc
+data/
+devel/

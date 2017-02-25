@@ -1,0 +1,300 @@
+#!/usr/bin/env python
+import argparse
+import sys
+import numpy as np
+import netCDF4
+import copy
+import time as timing
+import verif.util
+removeMissing = True
+nc_missing = netCDF4.default_fillvals["f4"]
+
+def progress_bar(fraction, width, text=""):
+   num_x = int(fraction * (width-len(text) - 2))
+   num_space = width - num_x - len(text) - 2
+   sys.stdout.write("\r" + text + "[" + "X" *  num_x + " " * num_space + "]")
+   sys.stdout.flush()
+
+parser = argparse.ArgumentParser(description='Converts DVH text files to verif Netcdf')
+parser.add_argument('files', type=str, help='Netcdf files', nargs="+")
+parser.add_argument('-o', type=str, metavar="FILE", help='Verif file', dest="verif_file", required=True)
+parser.add_argument('-v', type=str, help='DVH Variable', dest="variable", required=True)
+parser.add_argument('-l', type=str, help='Locations file', dest="locations_file", required=True)
+parser.add_argument('-i', type=str, default="0", help='Initialization times (hours)', dest="init_times")
+parser.add_argument('-lt', type=str, default=None, help='Lead times (hours)', dest="lead_times")
+parser.add_argument('--force_range', type=str, default=None, help='Remove values outside the range [min,max]', dest="range")
+parser.add_argument('--debug', help='Display debug information', action="store_true")
+
+args = parser.parse_args()
+
+names = {"FF": "Wind speed", "TA": "Temperature", "RR_1": "Precipitation", "RR_6":
+"Precipitation", "RR_01": "Precipitation", "RR_075": "Precipitation"}
+units = {"FF": "m/s", "TA": "^oC", "RR_1": "mm/h", "RR_6": "mm/6h", "RR_01": "mm/min", "RR_075": "mm/7.5min"}
+
+if args.debug:
+   width = verif.util.get_screen_width()
+
+width = verif.util.get_screen_width()
+locfilename = args.locations_file
+variable = args.variable
+ofilename = args.verif_file
+ifilenames = args.files
+init_times = verif.util.parse_numbers(args.init_times)
+acc = 1
+load_variable = variable
+if variable == "RR_075":
+   acc = 7.5 #1/60.0*7.5
+   load_variable = "RR_01"
+elif variable == "RR_6":
+   acc = 6 #1/60.0*7.5
+   load_variable = "RR_1"
+
+if args.debug:
+   print "Number of files: %d" % len(ifilenames)
+
+# Create lat/lon/elev map
+slats = dict()
+slons = dict()
+selevs = dict()
+locfile = open(locfilename, 'r')
+for line in locfile:
+   if(line[0] is not '#'):
+      line = line.split(' ')
+      line = [i for i in line if i is not '']
+      id   = int(line[0])
+      slats[id] = -999
+      slons[id] = -999
+      selevs[id] = -999
+      for at in line:
+         at = at.split('=')
+         if(at[0] == "lat"):
+            slats[id] = float(at[1])
+         elif(at[0] == "lon"):
+            slons[id] = float(at[1])
+         elif(at[0] == "elev"):
+            selevs[id] = float(at[1])
+
+Ns = dict()
+N = 0
+for ifilename in ifilenames:
+   ifile = open(ifilename, 'r')
+   Ns[ifilename] = sum(1 for line in ifile)
+   N = N + Ns[ifilename]
+
+if N > 1e8:
+   print "Too many lines, aborting"
+   sys.exit(-1)
+
+dates_raw = np.zeros(N,'int')
+times_raw = np.zeros(N,'float')
+offsets_raw = np.zeros(N,'float')
+ids_raw = np.zeros(N,'int')
+elevs = np.zeros(N,'float')
+values = np.nan*np.zeros(N,'float')
+
+index = 0
+time_start = timing.time()
+missing_stations = dict()
+date2unixtime_map = dict() # Lookup table for converting date to unixtime
+count = 0
+for ifilename in ifilenames:
+   ifile = open(ifilename, 'r')
+   header = ifile.readline().replace('\n', '').split(' ')
+   header = [i for i in header if i is not '']
+   Iid   = None
+   Iyear = None
+   Imonth = None
+   Iday = None
+   Itime = None
+   Imin = None
+   Ivar = None
+   for i in range(0, len(header)):
+      if(header[i] == "Stnr"):
+         Iid = i
+      elif(header[i] == "Year"):
+         Iyear = i
+      elif(header[i] == "Month"):
+         Imonth = i
+      elif(header[i] == "Day"):
+         Iday = i
+      elif(header[i] == "Time(UTC)"):
+         Itime = i
+      elif(header[i] == "MIN"):
+         Imin = i
+      elif(header[i] == load_variable):
+         Ivar = i
+   if None in [Iid, Iyear, Imonth, Iday, Itime, Ivar]:
+      print "The header in %s is invalid:" % ifilename
+      print header
+      ifile.close()
+      continue
+
+   for line in ifile:
+      count = count + 1
+      if args.debug and (N < width or count % int(N/width) == 0):
+         progress_bar(count*1.0/N, width, "Loading:   ")
+
+      data = line.split(' ')
+      data = [i for i in data if i is not '']
+      data = [i for i in data if i != '\n']
+      if(len(data) > 1 and verif.util.is_number(data[0])):
+         try:
+            id   = int(data[Iid])
+            date = int(data[Iyear])*10000 + int(data[Imonth])*100 + int(data[Iday])
+            time = int(data[Itime])
+         except Exception:
+            print "Could not read the following:"
+            print data
+            continue
+         min = 0
+         if Imin is not None:
+            min = float(data[Imin])
+            time = time + min / 60.0
+         if(id in slats and id in slons and id in selevs):
+            lat  = slats[id]
+            lon  = slons[id]
+            elev = selevs[id]
+            if(lat != -999 and lon != -999):
+               raw = data[Ivar]
+               if(raw == '.'):
+                  value = 0
+               else:
+                  value = float(data[Ivar])
+               if(not removeMissing or value != -999):
+                  dates_raw[index] = date
+                  offsets_raw[index] = time
+                  if date not in date2unixtime_map:
+                     ut = verif.util.date_to_unixtime(date)
+                     date2unixtime_map[date] = ut
+                  else:
+                     ut = date2unixtime_map[date]
+                  times_raw[index] = ut + time*3600
+                  ids_raw[index] = id
+                  values[index] = value
+                  index = index + 1
+         elif 0 and args.debug:
+            if id not in missing_stations:
+               print "No station data for %d" % id
+               missing_stations[id] = 1
+if args.debug:
+   print ""
+   time_end = timing.time()
+   print "Time: %f" % (time_end - time_start)
+
+time_start = timing.time()
+dates_raw = dates_raw[0:index]
+offsets_raw = offsets_raw[0:index]
+times_raw = times_raw[0:index]
+ids_raw = ids_raw[0:index]
+values = values[0:index]
+
+# Get unique values
+dates_raw_uniq = np.unique(np.sort(dates_raw))
+offsets_raw_uniq = np.unique(np.sort(offsets_raw))
+times_raw_uniq = np.unique(np.sort(times_raw))
+if len(times_raw_uniq) == 0:
+   print "Error: No unique times"
+   sys.exit()
+
+# Arrange
+min_time = np.min(times_raw_uniq)
+max_time = np.max(times_raw_uniq)
+doffset = (offsets_raw_uniq[1] - offsets_raw_uniq[0])*3600
+ids = np.unique(np.sort(ids_raw))
+times_arranged = np.arange(min_time, max_time+doffset, doffset)
+obs_arranged = np.nan*np.zeros([len(times_arranged), len(ids)], float)
+
+# Location map (id to index)
+id2index = dict()
+for i in range(0, len(ids)):
+   id2index[ids[i]] = i
+
+for i in range(0, len(times_raw)):
+   k = id2index[ids_raw[i]]
+   I = int((times_raw[i] - min_time) / doffset)
+   if I >= 0 and I < obs_arranged.shape[0]:
+      obs_arranged[I,k] = values[i]
+
+
+# Construct array of initialization times to output for
+times = np.nan * np.zeros(len(dates_raw_uniq)*len(init_times), int)
+count = 0
+for d in range(0, len(dates_raw_uniq)):
+   for i in range(0, len(init_times)):
+      times[count] = verif.util.date_to_unixtime(dates_raw_uniq[d])+init_times[i]*3600
+      count = count + 1
+
+if args.lead_times is None:
+   lead_times = offsets_raw_uniq
+else:
+   lead_times = verif.util.parse_numbers(args.lead_times)
+
+L = len(ids)
+LT = len(lead_times)
+
+# Populate output array
+obs = np.nan*np.zeros([len(times),LT,L], 'float')
+count = 0
+for t in range(0, len(times)):
+   count = count + 1
+   if args.debug:
+      progress_bar(count*1.0/(len(times)), width, "Arranging: ")
+   for o in range(0, LT):
+      curr_time = times[t] + lead_times[o]*3600
+      I = int((curr_time - min_time) / doffset)
+      if I >= 0 and I < obs_arranged.shape[0]:
+         if acc == 1:
+            obs[t, o, :] = obs_arranged[I, :]
+         else:
+            if I >= acc:
+               II = range(I-int(acc), I+1)
+               obs[t, o, :] = np.sum(obs_arranged[II, :], axis=0)
+if args.debug:
+   print ""
+   time_end = timing.time()
+   print "Time: %f" % (time_end - time_start)
+
+# Write file
+file = netCDF4.Dataset(ofilename, 'w', format="NETCDF3_CLASSIC")
+file.createDimension("time", None)
+file.createDimension("leadtime", LT)
+file.createDimension("location", L)
+vTime=file.createVariable("time", "i4", ("time",))
+vOffset=file.createVariable("leadtime", "f4", ("leadtime",))
+vLocation=file.createVariable("location", "i4", ("location",))
+vLat=file.createVariable("lat", "f4", ("location",))
+vLon=file.createVariable("lon", "f4", ("location",))
+vElev=file.createVariable("altitude", "f4", ("location",))
+vfcst=file.createVariable("fcst", "f4", ("time", "leadtime", "location"))
+vobs=file.createVariable("obs", "f4", ("time", "leadtime", "location"))
+if variable in names:
+   file.standard_name = names[variable]
+else:
+   file.standard_name = "Unknown"
+if variable in units:
+   file.units = unit = units[variable]
+
+lats = np.zeros(L, 'float')
+lons = np.zeros(L, 'float')
+elevs = np.zeros(L, 'float')
+for i in range(0, L):
+   lats[i] = slats[ids[i]]
+   lons[i] = slons[ids[i]]
+   elevs[i] = selevs[ids[i]]
+
+if args.range is not None:
+   r = verif.util.parse_numbers(args.range)
+   I = np.where((np.isnan(obs.flat)==1) | (obs.flat< r[0]) | (obs.flat> r[1]))[0]
+   obs.flat[I] = nc_missing
+   if args.debug:
+      print "Removing %d/%d values" % (len(I), len(obs.flat))
+
+vobs[:] = obs
+vTime[:] = times
+vOffset[:] = lead_times
+vLocation[:] = ids
+vLat[:] = lats
+vLon[:] = lons
+vElev[:] = elevs
+file.Conventions = "verif_1.0.0"
+file.close()

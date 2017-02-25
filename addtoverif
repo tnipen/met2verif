@@ -1,0 +1,135 @@
+#!/usr/bin/env python
+import sys
+import netCDF4
+import numpy as np
+import scipy.interpolate
+import datetime
+import copy
+import argparse
+import calendar
+import time
+import verif.data
+import verif.input
+import verif.util
+
+parser = argparse.ArgumentParser(description='Inserts forecast data from gridded netcdf files into a pre-generated verif file with observations')
+parser.add_argument('files', type=str, help='Netcdf files', nargs="+")
+parser.add_argument('-c', help='Should the forecasts be reset first?', action="store_true")
+parser.add_argument('-o', type=str, help='Verif files', dest="verifFilename")
+parser.add_argument('-u', type=str, help='Units', dest="units")
+parser.add_argument('-v', type=str, help='Name of field in input files', required=True)
+parser.add_argument('--multiply', type=float, default=1, help='Multiply all forecasts with this value')
+parser.add_argument('--add', type=float, default=0, help='Add this value to all forecasts (--multiply is done before --add)')
+parser.add_argument('--debug', help='Display debug information', action="store_true")
+parser.add_argument('--fill', help='Fill in missing with nearest forecast', action="store_true")
+parser.add_argument('--delays', default="0", help='What hours after initialization should this be repeated for?')
+parser.add_argument('--offsets', type=str, help='Only allow these forecast offsets')
+
+args = parser.parse_args()
+data_filenames = args.files
+verifFilename = args.verifFilename
+input = verif.input.NetcdfCf(verifFilename)
+locations = input.locations
+offsets = input.offsets
+times = input.times
+output_offsets = copy.deepcopy(offsets)
+if args.offsets is not None:
+    output_offsets = np.array(verif.util.parse_numbers(args.offsets))
+
+cachedindices = False
+I = np.nan*np.zeros(len(locations), 'int')
+J = np.nan*np.zeros(len(locations), 'int')
+fcst = -999*np.ones([len(times), len(offsets), len(locations)], 'float')
+
+if args.c:
+   fcst = -999*np.ones([len(times), len(offsets), len(locations)], 'float')
+else:
+   fcst = input.fcst
+
+delays = verif.util.parse_numbers(args.delays)
+
+for d in range(0, len(data_filenames)):
+   time_start = time.time()
+   if args.debug:
+      print "Processing: %s (%d/%d)" % (data_filenames[d], d+1, len(data_filenames))
+   curr_file = netCDF4.Dataset(data_filenames[d], 'r')
+   times_fcst = verif.util.clean(curr_file.variables["time"])
+   reftime = times_fcst[0]
+   offsets_fcst = (times_fcst - reftime)/3600.0
+   di = np.where(times == reftime)[0]
+   if(len(di) == 1):
+      data = (curr_file.variables[args.v])
+      data = data[:].astype(float) 
+      if(len(data.shape) == 4):
+         X = data.shape[2]
+         Y = data.shape[3]
+      elif(len(data.shape) == 3):
+         X = data.shape[1]
+         Y = data.shape[2]
+      elif(len(data.shape) == 5):
+         X = data.shape[3]
+         Y = data.shape[4]
+         data = np.mean(data, axis=2)
+         print "Taking the ensemble mean, since 5D array"
+      else:
+         verif.util.error("Input data has strange dimensions")
+
+      # Load cached indices
+      if not cachedindices:
+         if "latitude" in curr_file.variables:
+            lat = verif.util.clean(curr_file.variables["latitude"])
+            lon = verif.util.clean(curr_file.variables["longitude"])
+         else:
+            lat = verif.util.clean(curr_file.variables["lat"])
+            lon = verif.util.clean(curr_file.variables["lon"])
+
+         print "Loading nearest neighbours..."
+         for s in range(0, len(locations)):
+            currlat = locations[s].lat
+            currlon = locations[s].lon
+            #dist  = abs(currlat - lat)*110 + abs(currlon - lon)*50
+            dist  = verif.util.distance(currlat, currlon, lat, lon)
+            indices = np.unravel_index(dist.argmin(), dist.shape)
+            if(indices[0] > 0 and indices[0] < X-1 and indices[1] > 0 and indices[1] < Y-1):
+               I[s] = indices[0]
+               J[s] = indices[1]
+            else:
+               print "   Removing station %d: outside domain" % locations[s].id
+         cachedindices = True
+         print "Done"
+      q = data.flat
+      for r in range(0, len(delays)):
+          delay = delays[r]
+          curr_offsets_fcst = offsets_fcst - delay
+          di = np.where(times == (reftime + delay*3600))[0]
+          if len(di) == 1:
+              for t in range(0, len(output_offsets)):
+                 Itime = np.where(curr_offsets_fcst == output_offsets[t])[0]
+                 # print t, output_offsets[t], offsets_fcst, Itime
+                 if args.fill and len(Itime) == 0:
+                    # Use the first forecast offset after the current offset
+                    Ivalid = np.where(curr_offsets_fcst > output_offsets[t])[0]
+                    if len(Ivalid) > 0:
+                       Inearest = np.argmin(np.abs(curr_offsets_fcst[Ivalid] - output_offsets[t]))
+                       Itime = np.array([Ivalid[Inearest]])
+                 # print t, output_offsets[t], minutes, seconds, obsTime, Itime
+                 if len(Itime) == 1:
+                    ss = np.where((np.isnan(I)==0) & (np.isnan(J)==0))[0]
+                    indices = np.array(Itime * X*Y + I[ss]*Y + J[ss], 'int')
+                    temp = q[indices]
+                    temp = temp * args.multiply + args.add
+                    fcst[di,t,ss] = temp
+                 else:
+                    # print "Skipping"
+                    pass
+      time_end = time.time()
+      print "Timing: %f" % (time_end - time_start)
+   else:
+      print "Skipping file"
+   curr_file.close()
+
+input = netCDF4.Dataset(verifFilename, 'a')
+input.variables["fcst"][:] = fcst[:]
+if args.units is not None:
+   input.Units = args.units
+input.close()

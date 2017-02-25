@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# Download observations
+./download_kdvh -l 18700,50540 -sd 20150101 -ed 20150131 -o data.txt -v TA,RR_1,FF
+
+# Create template verif file
+./kdvh2verif data.txt -l kdvh_locations.txt -o data.nc -v TA -i 0,6,12,18 -lt 0:66

@@ -1,0 +1,47 @@
+#!/usr/bin/env python
+import argparse
+import sys
+import urllib2
+
+
+def main():
+   parser = argparse.ArgumentParser(description='Downloads data from KDVH')
+   parser.add_argument('-l', type=str, help='Location ids (e.g. 18700,50540)', dest="locations", required=True)
+   parser.add_argument('-sd', type=str, help='Start date (yyyymmdd)', dest="sd", required=True)
+   parser.add_argument('-ed', type=str, help='End date (yyyymmdd)', dest="ed", required=True)
+   parser.add_argument('-o', help='Output filename', dest="filename", required=True)
+   parser.add_argument('-v', help='Variables (e.g. TA,FF)', dest="variables", required=True)
+   parser.add_argument('--debug', help='Display debug information', action="store_true")
+
+   args = parser.parse_args()
+
+   # Set up url
+   start_date = get_date(args.sd)
+   end_date = get_date(args.ed)
+   baseurl = "http://klapp/metnopub/production/metno?re=17&ct=text/plain&ddel=dot&del/space&nmt=0&nod=-999&qa=0"
+   url = "%s&fd=%s&td=%s" % (baseurl, start_date, end_date)
+   for variable in args.variables.split(','):
+      url += "&p=%s" % variable
+   for id in args.locations.split(','):
+      url += "&s=%s" % id
+
+   if args.debug:
+      print url
+
+   # Download url
+   response = urllib2.urlopen(url)
+   html = response.read()
+   file = open(args.filename, 'w')
+   file.write(html)
+   file.close()
+
+def get_date(date):
+   """
+   date(str): yyyymmdd
+   """
+   # date = int("%02d.%02d.%04d" % (date % 100, date / 100 % 100, date / 10000))
+   date = "%s.%s.%s" % (date[6:8], date[4:6], date[0:4])
+   return date
+
+if __name__ == '__main__':
+   main()
