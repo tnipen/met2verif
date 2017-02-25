@@ -3,8 +3,9 @@ Scripts to convert MET-data to use in Verif
 
 Pre-requisites
 --------------
-You need to install verif, see https://github.com/WFRT/verif/ for installation instructions, but it
-should hopefully be as easy as:
+
+To use the scripts in this repository, you need to install verif, see https://github.com/WFRT/verif/
+for installation instructions, but it should hopefully be as easy as:
 
 .. code-block:: bash
 
