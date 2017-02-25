@@ -7,10 +7,13 @@ You need to install verif, see https://github.com/WFRT/verif/ for installation i
 should hopefully be as easy as:
 
 .. code-block:: bash
+
    sudo pip install verif
 
 Or if you do not have sudo privileges:
+
 .. code-block:: bash
+
    pip install verif --user
 
 Converting KDVH observations to Verif
