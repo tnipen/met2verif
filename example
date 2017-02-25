@@ -5,3 +5,6 @@
 
 # Create template verif file
 ./kdvh2verif data.txt -l kdvh_locations.txt -o data.nc -v TA -i 0,6,12,18 -lt 0:66
+
+# Add AROME data to file
+./addtoverif /lustre/storeB/immutable/short-term-archive/DNMI_AROME_METCOOP/2015/01/*/AROME_MetCoOp_*_DEF.nc_* -o data.nc -v air_temperature_2m

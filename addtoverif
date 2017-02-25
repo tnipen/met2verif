@@ -28,21 +28,21 @@ parser.add_argument('--offsets', type=str, help='Only allow these forecast offse
 args = parser.parse_args()
 data_filenames = args.files
 verifFilename = args.verifFilename
-input = verif.input.NetcdfCf(verifFilename)
+input = verif.input.Netcdf(verifFilename)
 locations = input.locations
-offsets = input.offsets
+leadtimes = input.leadtimes
 times = input.times
-output_offsets = copy.deepcopy(offsets)
+output_offsets = copy.deepcopy(leadtimes)
 if args.offsets is not None:
     output_offsets = np.array(verif.util.parse_numbers(args.offsets))
 
 cachedindices = False
 I = np.nan*np.zeros(len(locations), 'int')
 J = np.nan*np.zeros(len(locations), 'int')
-fcst = -999*np.ones([len(times), len(offsets), len(locations)], 'float')
+fcst = -999*np.ones([len(times), len(leadtimes), len(locations)], 'float')
 
 if args.c:
-   fcst = -999*np.ones([len(times), len(offsets), len(locations)], 'float')
+   fcst = -999*np.ones([len(times), len(leadtimes), len(locations)], 'float')
 else:
    fcst = input.fcst
 
@@ -57,9 +57,14 @@ for d in range(0, len(data_filenames)):
    reftime = times_fcst[0]
    offsets_fcst = (times_fcst - reftime)/3600.0
    di = np.where(times == reftime)[0]
+   print curr_file.variables["time"][:]
+   print times_fcst
+   print reftime
+   print offsets_fcst
+   print di
    if(len(di) == 1):
       data = (curr_file.variables[args.v])
-      data = data[:].astype(float) 
+      data = data[:]
       if(len(data.shape) == 4):
          X = data.shape[2]
          Y = data.shape[3]
@@ -97,6 +102,7 @@ for d in range(0, len(data_filenames)):
                print "   Removing station %d: outside domain" % locations[s].id
          cachedindices = True
          print "Done"
+
       q = data.flat
       for r in range(0, len(delays)):
           delay = delays[r]
