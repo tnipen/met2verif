@@ -31,7 +31,8 @@ First download the data from KDVH, using the provided kdhv_download script
 
 This will download data for the stations 18700 (Blindern) and 50540 (Bergen). Dates 20150101 to
 20150131 are downloaded and variables TA (temperature) RR_1 (hourly precipitation) and FF (wind
-speed) are used. The data is stored in data.txt.
+speed) are used. The data is stored in data.txt. For more information about KDVH, check out
+https://dokit.met.no/klima/userservices/urlinterface/brukerdok?s[]=klapp.
 
 Next, convert the text data in data.txt to Verif NetCDF file.
 
@@ -45,6 +46,10 @@ locations file (kdvh_locations.txt). A verif file can only contain a single vari
 forecast initializtion times (e.g. 0,6,12,18 specify 00 UTC, 06 UTC, 12 UTC, and 18 UTC
 initializations) and lead times (0:66 specify every hour from 0 to 66). The script will then
 duplicate the observations filling them in as necessary to match the initialization and lead times.
+
+
+Adding AROME data to Verif file
+-------------------------------
 
 Finally, we need to add forecast data to these files.
 
