@@ -24,6 +24,7 @@ parser.add_argument('--debug', help='Display debug information', action="store_t
 parser.add_argument('--fill', help='Fill in missing with nearest forecast', action="store_true")
 parser.add_argument('--delays', default="0", help='What hours after initialization should this be repeated for?')
 parser.add_argument('--offsets', type=str, help='Only allow these forecast offsets')
+parser.add_argument('--deacc', help='Deaccumulate', action="store_true")
 
 args = parser.parse_args()
 data_filenames = args.files
@@ -57,11 +58,11 @@ for d in range(0, len(data_filenames)):
    reftime = times_fcst[0]
    offsets_fcst = (times_fcst - reftime)/3600.0
    di = np.where(times == reftime)[0]
-   print curr_file.variables["time"][:]
-   print times_fcst
-   print reftime
-   print offsets_fcst
-   print di
+   # print curr_file.variables["time"][:]
+   # print times_fcst
+   # print reftime
+   # print offsets_fcst
+   # print di
    if(len(di) == 1):
       data = (curr_file.variables[args.v])
       data = data[:]
@@ -109,6 +110,7 @@ for d in range(0, len(data_filenames)):
           curr_offsets_fcst = offsets_fcst - delay
           di = np.where(times == (reftime + delay*3600))[0]
           if len(di) == 1:
+              prev = 0
               for t in range(0, len(output_offsets)):
                  Itime = np.where(curr_offsets_fcst == output_offsets[t])[0]
                  # print t, output_offsets[t], offsets_fcst, Itime
@@ -124,7 +126,9 @@ for d in range(0, len(data_filenames)):
                     indices = np.array(Itime * X*Y + I[ss]*Y + J[ss], 'int')
                     temp = q[indices]
                     temp = temp * args.multiply + args.add
-                    fcst[di,t,ss] = temp
+                    fcst[di,t,ss] = temp - prev
+                    if args.deacc:
+                        prev = temp
                  else:
                     # print "Skipping"
                     pass
