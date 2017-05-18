@@ -1,0 +1,10 @@
+#!/bin/bash
+if [ "$2" = "" ]; then
+   echo "usage: kdvh_locations.txt id_file"
+   echo ""
+   echo "Extracts ids from the locations file"
+   exit
+fi
+for loc in `cat $2`; do
+   grep "^$loc" $1 | grep -v "#"
+done
