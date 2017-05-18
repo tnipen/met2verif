@@ -25,6 +25,8 @@ parser.add_argument('--fill', help='Fill in missing with nearest forecast', acti
 parser.add_argument('--delays', default="0", help='What hours after initialization should this be repeated for?')
 parser.add_argument('--offsets', type=str, help='Only allow these forecast offsets')
 parser.add_argument('--deacc', help='Deaccumulate', action="store_true")
+parser.add_argument('--min', type=float, help='Minimum value')
+parser.add_argument('--max', type=float, help='Maximum value')
 
 args = parser.parse_args()
 data_filenames = args.files
@@ -126,7 +128,12 @@ for d in range(0, len(data_filenames)):
                     indices = np.array(Itime * X*Y + I[ss]*Y + J[ss], 'int')
                     temp = q[indices]
                     temp = temp * args.multiply + args.add
-                    fcst[di,t,ss] = temp - prev
+                    value = temp - prev
+                    if args.min is not None:
+                        value[value < args.min]= args.min
+                    if args.max is not None:
+                        value[value > args.max] = args.max
+                    fcst[di,t,ss] = value
                     if args.deacc:
                         prev = temp
                  else:
