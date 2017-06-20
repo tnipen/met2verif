@@ -1,0 +1,196 @@
+#!/usr/bin/env python
+# -*- coding: ISO-8859-1 -*-
+import sys
+import netCDF4
+import numpy as np
+import scipy.interpolate
+import datetime
+import copy
+import argparse
+import calendar
+import time
+import verif.data
+import verif.input
+import verif.util
+import json
+reload(sys)
+sys.setdefaultencoding('ISO-8859-1')
+
+def get_station_metadata(locfilename):
+   # Create lat/lon/elev map
+   info = dict()
+   locfile = open(locfilename, 'r')
+   for line in locfile:
+      if(line[0] is not '#'):
+         line = line.split(' ')
+         line = [i for i in line if i is not '']
+         id   = int(line[0])
+         lat = -999
+         lon = -999
+         elev = -999
+         name = ""
+         for at in line:
+            at = at.split('=')
+            if(at[0] == "lat"):
+               lat = float(at[1])
+            elif(at[0] == "lon"):
+               lon = float(at[1])
+            elif(at[0] == "elev"):
+               elev = float(at[1])
+            elif(at[0] == "name"):
+               name = at[1].strip()
+         info[name] = {"id": id, "lat": lat, "lon": lon, "elev": elev, "name": name}
+   locfile.close()
+   return info
+
+
+def get_hardcoded_station_metadata():
+   """
+   Returns a map with key, values like this: 
+      BLINDERN: 18700
+   """
+   base = {"Blindern": 18700, "Finse": 25830, "Flesland": 50500, "Kautokeino":93700, "Kjevik":39040, "Lærdalsøyri":54110, "Lillehammer": 12680, "Ona":62480, "Takle":52860, "Tromsø":90490}
+   info = dict()
+   for key,value in base.iteritems():
+      info[key.upper()] = {"id": value}
+
+   return info
+
+
+if __name__ == "__main__":
+   parser = argparse.ArgumentParser(description='Add weather underground json data to verif file')
+   parser.add_argument('files', type=str, help='Netcdf files', nargs="+")
+   parser.add_argument('-c', help='Should the forecasts be reset first?', action="store_true")
+   parser.add_argument('-o', type=str, help='Verif files', dest="verifFilename")
+   parser.add_argument('-u', type=str, help='Units', dest="units")
+   parser.add_argument('-v', type=str, help='Name of field in input files', required=True)
+   parser.add_argument('-l', type=str, help='Locations file', dest="locations_file", required=False)
+   parser.add_argument('--multiply', type=float, default=1, help='Multiply all forecasts with this value')
+   parser.add_argument('--add', type=float, default=0, help='Add this value to all forecasts (--multiply is done before --add)')
+   parser.add_argument('--debug', help='Display debug information', action="store_true")
+   parser.add_argument('--fill', help='Fill in missing with nearest forecast', action="store_true")
+   parser.add_argument('--delays', default="0", help='What hours after initialization should this be repeated for?')
+   parser.add_argument('--offsets', type=str, help='Only allow these forecast offsets')
+   parser.add_argument('--deacc', help='Deaccumulate', action="store_true")
+   parser.add_argument('--min', type=float, help='Minimum value')
+   parser.add_argument('--max', type=float, help='Maximum value')
+
+   if len(sys.argv) == 1:
+      parser.print_help()
+      sys.exit()
+
+   args = parser.parse_args()
+   data_filenames = args.files
+   verifFilename = args.verifFilename
+   input = verif.input.Netcdf(verifFilename)
+   locations = input.locations
+   leadtimes = input.leadtimes
+   times = input.times
+   output_offsets = copy.deepcopy(leadtimes)
+   if args.offsets is not None:
+       output_offsets = np.array(verif.util.parse_numbers(args.offsets))
+
+   cachedindices = False
+   I = np.nan*np.zeros(len(locations), 'int')
+   J = np.nan*np.zeros(len(locations), 'int')
+   fcst = -999*np.ones([len(times), len(leadtimes), len(locations)], 'float')
+
+   if args.locations_file is not None:
+      station_metadata = get_station_metadata(args.locations_file)
+   else:
+      station_metadata = get_hardcoded_station_metadata()
+
+   if args.c:
+      fcst = -999*np.ones([len(times), len(leadtimes), len(locations)], 'float')
+   else:
+      fcst = input.fcst
+   var = "temp"
+
+   delays = verif.util.parse_numbers(args.delays)
+
+   for d in range(0, len(data_filenames)):
+      curr_file = open(data_filenames[d])
+      print data_filenames[d]
+      curr_station_name = data_filenames[d].split('_')[2].upper()
+      curr_station_id = station_metadata[curr_station_name]["id"]
+
+      data = json.loads(curr_file.read())
+      time_start = time.time()
+      if args.debug:
+         print "Processing: %s (%d/%d)" % (data_filenames[d], d+1, len(data_filenames))
+
+      if len(data["hourly_forecast"]) > 0:
+         valid_times = list()
+         for i in data["hourly_forecast"]:
+            unixtime = int(i["FCTTIME"]["epoch"])
+            valid_times += [unixtime]
+         times_fcst = np.array(valid_times)
+         reftime = np.min(times_fcst /86400) * 86400
+         offsets_fcst = (times_fcst - reftime)/3600.0
+         print [verif.util.unixtime_to_date(q) for q in times_fcst]
+         print [verif.util.unixtime_to_date(q) for q in times]
+         print times_fcst
+         print times
+         print reftime
+
+         di = np.where(times == reftime)[0]
+         # print curr_file.variables["time"][:]
+         # print times_fcst
+         # print reftime
+         # print offsets_fcst
+         # print di
+         if len(di) == 1:
+
+            ids = np.array([loc.id for loc in locations])
+            ss = np.where(ids == curr_station_id)[0]
+            if len(ss) == 1:
+               print curr_station_id, ids
+               print "Station index %d" % ss
+
+               curr = np.array([float(i[var]["metric"]) for i in data["hourly_forecast"]])
+
+               q = curr.flat
+               for r in range(0, len(delays)):
+                   delay = delays[r]
+                   curr_offsets_fcst = offsets_fcst - delay
+                   di = np.where(times == (reftime + delay*3600))[0]
+                   if len(di) == 1:
+                       prev = 0
+                       for t in range(0, len(output_offsets)):
+                          Itime = np.where(curr_offsets_fcst == output_offsets[t])[0]
+                          # print t, output_offsets[t], offsets_fcst, Itime
+                          if args.fill and len(Itime) == 0:
+                             # Use the first forecast offset after the current offset
+                             Ivalid = np.where(curr_offsets_fcst > output_offsets[t])[0]
+                             if len(Ivalid) > 0:
+                                Inearest = np.argmin(np.abs(curr_offsets_fcst[Ivalid] - output_offsets[t]))
+                                Itime = np.array([Ivalid[Inearest]])
+                          # print t, output_offsets[t], minutes, seconds, obsTime, Itime
+                          if len(Itime) == 1:
+                             indices = np.array(Itime, 'int')
+                             temp = curr[indices]
+                             temp = temp * args.multiply + args.add
+                             value = temp - prev
+                             if args.min is not None:
+                                value[value < args.min]= args.min
+                             if args.max is not None:
+                                value[value > args.max] = args.max
+                             fcst[di,t,ss] = value
+                             if args.deacc:
+                                 prev = temp
+                          else:
+                             # print "Skipping"
+                             pass
+            else:
+               verif.util.warning("Could not find station %d in verif file" % curr_station_id)
+            time_end = time.time()
+            print "Timing: %f" % (time_end - time_start)
+         else:
+            print "Skipping file"
+      curr_file.close()
+
+   input = netCDF4.Dataset(verifFilename, 'a')
+   input.variables["fcst"][:] = fcst[:]
+   if args.units is not None:
+      input.Units = args.units
+   input.close()
