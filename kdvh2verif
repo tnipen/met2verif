@@ -158,6 +158,8 @@ for ifilename in ifilenames:
                raw = data[Ivar]
                if(raw == '.'):
                   value = 0
+               elif(raw == 'x'):
+                  value = -999
                else:
                   value = float(data[Ivar])
                if(not removeMissing or value != -999):
