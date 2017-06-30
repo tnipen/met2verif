@@ -6,5 +6,5 @@ if [ "$2" = "" ]; then
    exit
 fi
 for loc in `cat $2`; do
-   grep "^$loc" $1 | grep -v "#"
+   grep "^$loc " $1 | grep -v "#"
 done
