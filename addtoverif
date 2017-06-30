@@ -15,6 +15,7 @@ import verif.util
 parser = argparse.ArgumentParser(description='Inserts forecast data from gridded netcdf files into a pre-generated verif file with observations')
 parser.add_argument('files', type=str, help='Netcdf files', nargs="+")
 parser.add_argument('-c', help='Should the forecasts be reset first?', action="store_true")
+parser.add_argument('-e', type=int, help='If ensemble file, which member to use?', dest="member")
 parser.add_argument('-o', type=str, help='Verif files', dest="verifFilename")
 parser.add_argument('-u', type=str, help='Units', dest="units")
 parser.add_argument('-v', type=str, help='Name of field in input files', required=True)
@@ -79,10 +80,11 @@ for d in range(0, len(data_filenames)):
          X = data.shape[1]
          Y = data.shape[2]
       elif(len(data.shape) == 5):
+         if args.member is None:
+            verif.util.error("Variable is 5D. Need to specify ensemble member using -e")
          X = data.shape[3]
          Y = data.shape[4]
-         data = np.mean(data, axis=2)
-         print "Taking the ensemble mean, since 5D array"
+         data = data[:,:,args.member,:,:]
       else:
          verif.util.error("Input data has strange dimensions")
 
