@@ -90,6 +90,8 @@ for d in range(0, len(data_filenames)):
          else:
             lat = verif.util.clean(curr_file.variables["lat"])
             lon = verif.util.clean(curr_file.variables["lon"])
+         if len(lat.shape) == 1:
+            lon, lat = np.meshgrid(lon, lat)
 
          print "Loading nearest neighbours..."
          for s in range(0, len(locations)):
