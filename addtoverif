@@ -12,11 +12,43 @@ import verif.data
 import verif.input
 import verif.util
 
+
+"""
+
+   Arguments:
+      data: N-D array of data
+      ml: Prefer this model level, if there are several levels
+
+   Returns:
+      np.array: 3D array: Time X, Y
+
+"""
+def get_field(data, ml=0, member=None):
+   if(len(data.shape) == 4):
+      # Extract the right model level, if multiple levels
+      use_ml = 0
+      if data.shape[1] > 1:
+         print "Taking model level %d" % ml
+         use_ml = ml
+      data = data[:, use_ml, :, :]
+   elif(len(data.shape) == 3):
+      pass
+   elif(len(data.shape) == 5):
+      if data.shape[1] > 1:
+         print "Taking the lower level"
+      if member is None:
+         verif.util.error("Variable is 5D. Need to specify ensemble member using -e")
+      data = data[:, 0, member, :, :]
+   else:
+      verif.util.error("Input data has strange dimensions")
+   return data
+
+
 parser = argparse.ArgumentParser(description='Inserts forecast data from gridded netcdf files into a pre-generated verif file with observations')
 parser.add_argument('files', type=str, help='Netcdf files', nargs="+")
 parser.add_argument('-c', help='Should the forecasts be reset first?', action="store_true")
 parser.add_argument('-e', type=int, help='If ensemble file, which member to use?', dest="member")
-parser.add_argument('-o', type=str, help='Verif files', dest="verifFilename")
+parser.add_argument('-o', type=str, help='Verif files', dest="verifFilename", required=True)
 parser.add_argument('-u', type=str, help='Units', dest="units")
 parser.add_argument('-v', type=str, help='Name of field in input files', required=True)
 parser.add_argument('--multiply', type=float, default=1, help='Multiply all forecasts with this value')
@@ -27,7 +59,15 @@ parser.add_argument('--delays', default="0", help='What hours after initializati
 parser.add_argument('--offsets', type=str, help='Only allow these forecast offsets')
 parser.add_argument('--deacc', help='Deaccumulate', action="store_true")
 parser.add_argument('--min', type=float, help='Minimum value')
+parser.add_argument('--ml', default=0, type=int, help='Model level')
 parser.add_argument('--max', type=float, help='Maximum value')
+parser.add_argument('-n', default=0, type=int, help='Neighbourhood size in number of gridpoints')
+parser.add_argument('--lsm', type=float, help='Use this LSM when finding nearest neighbour')
+parser.add_argument('--lsm_file', help='File to read lsm from')
+parser.add_argument('--lapse', default=None, help='Negative of dT/dz in degrees/km (6.5 is normal, 0 is default)')
+parser.add_argument('--save', default=False, help='Store lapse rate', action="store_true")
+parser.add_argument('--radius', type=int, default=5, help='Neighbourhood radius for lapse rate')
+parser.add_argument('--lapse_var', default=None, help='Which variable to use for the lapse rate?')
 
 if len(sys.argv) == 1:
    parser.print_help()
@@ -56,65 +96,131 @@ else:
 
 delays = verif.util.parse_numbers(args.delays)
 
+print "Range obs:  %d %d" % (np.min(times), np.max(times))
+
+"""
+Loop over all files
+"""
 for d in range(0, len(data_filenames)):
    time_start = time.time()
    if args.debug:
       print "Processing: %s (%d/%d)" % (data_filenames[d], d+1, len(data_filenames))
    curr_file = netCDF4.Dataset(data_filenames[d], 'r')
-   times_fcst = verif.util.clean(curr_file.variables["time"])
+   times_fcst = curr_file.variables["time"][:]
    reftime = times_fcst[0]
    offsets_fcst = (times_fcst - reftime)/3600.0
-   di = np.where(times == reftime)[0]
-   # print curr_file.variables["time"][:]
-   # print times_fcst
-   # print reftime
-   # print offsets_fcst
-   # print di
-   if(len(di) == 1):
-      data = (curr_file.variables[args.v])
-      data = data[:]
-      if(len(data.shape) == 4):
-         X = data.shape[2]
-         Y = data.shape[3]
-      elif(len(data.shape) == 3):
-         X = data.shape[1]
-         Y = data.shape[2]
-      elif(len(data.shape) == 5):
-         if args.member is None:
-            verif.util.error("Variable is 5D. Need to specify ensemble member using -e")
-         X = data.shape[3]
-         Y = data.shape[4]
-         data = data[:,:,args.member,:,:]
-      else:
-         verif.util.error("Input data has strange dimensions")
+   file_within_range = len(np.where(times == reftime)[0]) == 1
 
-      # Load cached indices
+   print "Range fcst: %d %d" % (np.min(times_fcst), np.max(times_fcst))
+   print "Offsets: %d %d" % (np.min(offsets_fcst), np.max(offsets_fcst))
+
+   if file_within_range:
+      data = get_field(curr_file.variables[args.v], args.ml, args.member)
+      X = data.shape[1]
+      Y = data.shape[2]
+
+      """
+      Compute nearest neighbours
+      """
       if not cachedindices:
          if "latitude" in curr_file.variables:
-            lat = verif.util.clean(curr_file.variables["latitude"])
-            lon = verif.util.clean(curr_file.variables["longitude"])
+            lat = curr_file.variables["latitude"][:]
+            lon = curr_file.variables["longitude"][:]
          else:
-            lat = verif.util.clean(curr_file.variables["lat"])
-            lon = verif.util.clean(curr_file.variables["lon"])
+            lat = curr_file.variables["lat"][:]
+            lon = curr_file.variables["lon"][:]
+         if args.lapse is not None:
+            if "altitude" in curr_file.variables:
+               elev = curr_file.variables["altitude"][:]
+            elif "surface_geopotential" in curr_file.variables:
+               elev = np.squeeze(curr_file.variables["surface_geopotential"][:] / 9.81)
+               elev = elev[0, :, :]
+            else:
+               verif.util.error("Could not find altitude field in file")
+         lsm = None
+         if args.lsm_file is not None:
+            lsm_file = netCDF4.Dataset(args.lsm_file, 'r')
+            lsm = lsm_file.variables["land_area_fraction"][:]
+            lsm_lat = lsm_file.variables["latitude"][:]
+            lsm_lon = lsm_file.variables["longitude"][:]
+            lsm_file.close()
+         elif "land_area_fraction" in curr_file.variables:
+            lsm = curr_file.variables["land_area_fraction"][:]
+            lsm_lat = lat
+            lsm_lon = lon
+
          if len(lat.shape) == 1:
             lon, lat = np.meshgrid(lon, lat)
-
+         assert(lat.shape == lon.shape)
          print "Loading nearest neighbours..."
+         num_removed = 0
          for s in range(0, len(locations)):
             currlat = locations[s].lat
             currlon = locations[s].lon
-            #dist  = abs(currlat - lat)*110 + abs(currlon - lon)*50
             dist  = verif.util.distance(currlat, currlon, lat, lon)
             indices = np.unravel_index(dist.argmin(), dist.shape)
             if(indices[0] > 0 and indices[0] < X-1 and indices[1] > 0 and indices[1] < Y-1):
-               I[s] = indices[0]
-               J[s] = indices[1]
-            else:
-               print "   Removing station %d: outside domain" % locations[s].id
-         cachedindices = True
-         print "Done"
+               if args.lsm is not None:
+                  if lsm is None:
+                     verif.util.error("No land_area_fraction available in input file")
+                  if args.n == 0:
+                     verif.util.error("Neighbourhood size must be at least 1 to use --lsm")
+                  lsm_X = lsm.shape[0]
+                  lsm_Y = lsm.shape[1]
+                  lsm_dist = verif.util.distance(currlat, currlon, lsm_lat, lsm_lon)
+                  lsm_indices = np.unravel_index(lsm_dist.argmin(), lsm_dist.shape)
 
+                  Istart = max(0, lsm_indices[0] - args.n)
+                  Jstart = max(0, lsm_indices[1] - args.n)
+                  Ihood = range(Istart, min(lsm_X, lsm_indices[0] + args.n + 1))
+                  Jhood = range(Jstart, min(lsm_Y, lsm_indices[1] + args.n + 1))
+                  lsm_hood = lsm[Ihood,:][:,Jhood]
+                  diff = np.abs(lsm_hood - args.lsm)
+                  # print lsm_hood
+                  dI, dJ = np.unravel_index(diff.argmin(), diff.shape)
+                  lsm_at_best = lsm_hood[dI, dJ]
+                  # print lsm_at_best
+                  II, JJ = np.where(lsm_hood == lsm_at_best)
+                  # print II, JJ
+                  # print Ihood, Jhood
+                  lsm_dist_hood = lsm_dist[Ihood, :][:, Jhood]
+                  # print lsm_dist_hood
+                  Imindist_at_best = np.argmin(lsm_dist_hood[II, JJ])
+                  # print lsm_dist_hood[3,3]
+                  # print np.min(lsm_dist_hood)
+                  # print Imindist_at_best
+                  # print II[Imindist_at_best]
+                  # print JJ[Imindist_at_best]
+                  dI = II[Imindist_at_best]
+                  dJ = JJ[Imindist_at_best]
+
+                  # print dI, dJ, Istart, lsm_indices[0], Jstart, lsm_indices[1]
+                  I[s] = indices[0] + dI + Istart - lsm_indices[0]
+                  J[s] = indices[1] + dJ + Jstart - lsm_indices[1]
+                  # print I[s], J[s]
+                  # print data[0, 0, range(indices[0]-3,indices[0]+4),:][:,range(indices[1]-3,indices[1]+4)]-273.15
+               else:
+                  I[s] = indices[0]
+                  J[s] = indices[1]
+            else:
+               num_removed += 1
+         if num_removed > 0:
+            print "Removing %d stations outside domain" % num_removed
+         cachedindices = True
+         ss = np.where((np.isnan(I)==0) & (np.isnan(J)==0))[0]
+
+     # Elevation correction
+      if args.lapse is not None:
+         indices2 = np.array(I[ss]*Y + J[ss], 'int')
+         elevs = np.array([locations[sss].elev for sss in ss])
+         dz = elevs - elev.flat[indices2]
+
+      R = args.radius
       q = data.flat
+      if args.lapse_var is None:
+         lapse_data = data
+      else:
+         lapse_data = get_field(curr_file.variables[args.lapse_var], args.ml)
       for r in range(0, len(delays)):
           delay = delays[r]
           curr_offsets_fcst = offsets_fcst - delay
@@ -136,6 +242,42 @@ for d in range(0, len(data_filenames)):
                     indices = np.array(Itime * X*Y + I[ss]*Y + J[ss], 'int')
                     temp = q[indices]
                     temp = temp * args.multiply + args.add
+                    # Elevation correction
+                    if args.lapse is not None:
+                       if args.lapse == "gradient":
+                          lapse_rate = np.zeros(len(ss))
+                          for Is in range(len(ss)):
+                             sss = ss[Is]
+                             currI = int(I[sss])
+                             currJ = int(J[sss])
+                             local_elevs = elev[range(currI-R, currI+R+1), :][:, range(currJ-R, currJ+R+1)]
+                             local_temps = lapse_data[t,:,:][range(currI-R,currI+R+1), :][:, range(currJ-R, currJ+R+1)]
+                             #if locations[sss].id == 18700 and t == 0:
+                             #   import matplotlib.pylab as mpl
+                             #   mpl.contourf(local_elevs)
+                             #   mpl.show()
+                             local_elevs = local_elevs.flatten()
+                             local_temps = local_temps.flatten()
+                             lapse_rate[Is] = (np.mean(local_elevs * local_temps) - np.mean(local_elevs)*np.mean(local_temps)) / ( np.mean(local_elevs*local_elevs) - np.mean(local_elevs)*np.mean(local_elevs))
+                             # if locations[sss].id == 18700 and t == 0:
+                             #    print local_elevs
+                             #    print local_temps
+                             #    print lapse_rate[Is]
+                             #    print local_elevs.shape
+                             #    print np.mean(local_elevs),np.mean(local_temps),np.mean(local_elevs*local_elevs)
+                             #   # import matplotlib.pylab as mpl
+                             #   # mpl.plot(local_temps, local_elevs, 'o')
+                             #   # mpl.show()
+                             #   # sys.exit()
+                          corr = dz * (lapse_rate)
+                          if args.save:
+                             temp = lapse_rate * 1000
+                          else:
+                             temp += corr
+                       else:
+                          lapse_rate = float(args.lapse)
+                          corr = dz * (-lapse_rate) / 1000
+                          temp += corr
                     value = temp - prev
                     if args.min is not None:
                         value[value < args.min]= args.min
