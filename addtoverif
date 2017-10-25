@@ -33,7 +33,7 @@ def get_field(data, ml=0, member=None):
          use_ml = ml
       data = data[:, use_ml, :, :]
    elif(len(data.shape) == 3):
-      pass
+      data = data[:, :, :]
    elif(len(data.shape) == 5):
       if data.shape[1] > 1:
          print "Taking the lower level"
