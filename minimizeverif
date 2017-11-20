@@ -1,0 +1,84 @@
+#!/usr/bin/env python
+import verif.data
+import verif.input
+import verif.util
+import verif.field
+import sys
+from netCDF4 import Dataset as netcdf
+import numpy as np
+import scipy.interpolate
+import datetime
+
+if(len(sys.argv) < 2):
+   print "minimizeverif.py <verifFile>"
+   sys.exit()
+
+verifFilename = sys.argv[1]
+newFilename = sys.argv[2]
+
+print "starting"
+
+ifile = verif.input.NetcdfCf(verifFilename)
+locations = ifile.locations
+locationids = [loc.id for loc in locations]
+offsets  = ifile.offsets
+times    = ifile.times
+lats     = [loc.lat for loc in locations]
+lons     = [loc.lon for loc in locations]
+elevs    = [loc.elev for loc in locations]
+
+fcst = verif.util.clean(ifile.fcst)
+obs  = verif.util.clean(ifile.obs)
+
+# Find valid times
+valid = np.zeros(len(times), 'bool')
+for d in range(0, len(times)):
+    q = obs[d,:,:].flatten()+fcst[d,:,:].flatten()
+    valid[d] = (np.sum(np.isnan(q) == 0) > 0)
+Itimes = np.where(valid == 1)[0]
+
+# Find valid offsets
+valid = np.zeros(len(offsets), 'bool')
+for d in range(0, len(offsets)):
+    q = obs[:,d,:].flatten()+fcst[:,d,:].flatten()
+    valid[d] = (np.sum(np.isnan(q) == 0) > 0)
+Ioffsets = np.where(valid == 1)[0]
+
+# Find valid locations
+valid = np.zeros(len(locations), 'bool')
+for d in range(0, len(locations)):
+    q = obs[:,:,d].flatten()+fcst[:,:,d].flatten()
+    valid[d] = (np.sum(np.isnan(q) == 0) > 0)
+Ilocations = np.where(valid == 1)[0]
+
+print Ioffsets, Itimes, Ilocations
+
+file = netcdf(newFilename, 'w', format="NETCDF4")
+file.createDimension("lead_time", len(Ioffsets))
+file.createDimension("time", None)
+file.createDimension("location", len(Ilocations))
+vTime=file.createVariable("time", "i4", ("time",))
+vOffset=file.createVariable("lead_time", "f4", ("lead_time",))
+vLocation=file.createVariable("id", "f8", ("location",))
+vLat=file.createVariable("lat", "f4", ("location",))
+vLon=file.createVariable("lon", "f4", ("location",))
+vElev=file.createVariable("altitude", "f4", ("location",))
+vfcst=file.createVariable("fcst", "f4", ("time", "lead_time", "location"))
+vobs=file.createVariable("obs", "f4", ("time", "lead_time", "location"))
+file.Variable = ifile.variable.name
+file.Units = ifile.variable.units
+fcst = fcst[Itimes,:,:]
+fcst = fcst[:,Ioffsets,:]
+fcst = fcst[:,:,Ilocations]
+vfcst[:] = fcst
+obs = obs[Itimes,:,:]
+obs = obs[:,Ioffsets,:]
+obs = obs[:,:,Ilocations]
+vobs[:] = obs
+vTime[:] = times[Itimes]
+vOffset[:] = offsets[Ioffsets]
+vLocation[:] = locationids[Ilocations]
+vLat[:] = lats[Ilocations]
+vLon[:] = lons[Ilocations]
+vElev[:] = elevs[Ilocations]
+file.close()
