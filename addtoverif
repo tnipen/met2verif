@@ -12,6 +12,7 @@ import verif.data
 import verif.input
 import verif.util
 import scipy.spatial
+import pyproj
 
 
 """
@@ -127,9 +128,25 @@ for d in range(0, len(data_filenames)):
          if "latitude" in curr_file.variables:
             lat = curr_file.variables["latitude"][:]
             lon = curr_file.variables["longitude"][:]
-         else:
+         elif "lat" in curr_file.variables:
             lat = curr_file.variables["lat"][:]
             lon = curr_file.variables["lon"][:]
+         else:
+            proj = None
+            for v in curr_file.variables:
+               if hasattr(curr_file.variables[v], "proj4"):
+                  projection = str(curr_file.variables[v].proj4)
+                  proj = pyproj.Proj(projection)
+                  print "Reading projection information"
+                  if "x" in curr_file.variables:
+                     x = curr_file.variables["x"][:]
+                     y = curr_file.variables["y"][:]
+                  else:
+                     abort()
+                  xx, yy = np.meshgrid(x, y)
+                  lon, lat = proj(xx, yy, inverse=True)
+
+
          if args.lapse is not None:
             if "altitude" in curr_file.variables:
                elev = curr_file.variables["altitude"][:]
