@@ -53,6 +53,7 @@ parser.add_argument('-e', type=int, help='If ensemble file, which member to use?
 parser.add_argument('-o', type=str, help='Verif files', dest="verifFilename", required=True)
 parser.add_argument('-u', type=str, help='Units', dest="units")
 parser.add_argument('-v', type=str, help='Name of field in input files', required=True)
+parser.add_argument('--remove', help='Should stations outside the domain of the input be removed?', action="store_true")
 parser.add_argument('--multiply', type=float, default=1, help='Multiply all forecasts with this value')
 parser.add_argument('--add', type=float, default=0, help='Add this value to all forecasts (--multiply is done before --add)')
 parser.add_argument('--debug', help='Display debug information', action="store_true")
@@ -108,6 +109,9 @@ for d in range(0, len(data_filenames)):
    if args.debug:
       print "Processing: %s (%d/%d)" % (data_filenames[d], d+1, len(data_filenames))
    curr_file = netCDF4.Dataset(data_filenames[d], 'r')
+   if "time" not in curr_file.variables:
+      print "Missing 'time' variable in file. Skipping. "
+      continue
    times_fcst = curr_file.variables["time"][:]
    reftime = times_fcst[0]
    offsets_fcst = (times_fcst - reftime)/3600.0
@@ -186,10 +190,14 @@ for d in range(0, len(data_filenames)):
             # indices = np.unravel_index(dist.argmin(), dist.shape)
             # Fase way of computing nearest neighbour
             dist, index = nn_tree.query([currlat, currlon])
+            # if dist > 0.01:
+            #    print "### " , currlat, currlon, locations[s], dist
+            #    # verif.util.error("Too far %f" % dist)
             indices = np.unravel_index(index, lat.shape)
 
             # print locations[s], dist, indices
-            if(indices[0] > 0 and indices[0] < X-1 and indices[1] > 0 and indices[1] < Y-1):
+            remove = args.remove and (indices[0] == 0 or indices[0] >= X-1 or indices[1] == 0 or indices[1] >= Y-1)
+            if not remove:
                if args.lsm is not None:
                   if lsm is None:
                      verif.util.error("No land_area_fraction available in input file")
