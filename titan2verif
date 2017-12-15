@@ -1,0 +1,135 @@
+#!/usr/bin/env python
+import sys
+import netCDF4
+import numpy as np
+import scipy.interpolate
+import datetime
+import copy
+import argparse
+import calendar
+import time
+import verif.data
+import verif.input
+import verif.util
+import pyproj
+
+
+def main():
+   parser = argparse.ArgumentParser(description='Verifies output from Titan against trusted observations')
+   parser.add_argument('file', help='Input file from titan')
+   parser.add_argument('-o', help='Verif file', dest="ofilename", required=True)
+   parser.add_argument('-d', type=int, help='Date of input file in YYYYMMDD', dest='date', required=True)
+   parser.add_argument('-i', type=float, help='Time of day of input file in HH', dest='hour', required=True)
+   parser.add_argument('-r', type=float, default=5, help='Radius of neighbourhood in km', dest='radius')
+   parser.add_argument('-mn', type=int, default=3, help='Minimum number of stations required', dest='min_num')
+   parser.add_argument('-a', default="median", help='Aggregator (one of mean, median, min, max, or a number to specify a quantile)', dest='aggregator')
+   parser.add_argument('-l', type=verif.util.parse_numbers, help='Which output locations to process', dest='locations')
+   parser.add_argument('-ed', default=100, type=int, help='Min elevation difference', dest='min_elev_diff')
+   parser.add_argument('-proj', default="+proj=lcc +lat_0=63 +lon_0=15 +lat_1=63 +lat_2=63 +no_defs +R=6.371e+06", help='Projection for distances', dest='proj')
+   parser.add_argument('-u', help='Units', dest="units")
+   parser.add_argument('-v', default="value", help='What variable to show?', dest="variable")
+   parser.add_argument('-c', help='Clear forecasts in output file', dest='clear', action="store_true")
+   parser.add_argument('--multiply', type=float, default=1, help='Multiply all forecasts with this value')
+   parser.add_argument('--add', type=float, default=0, help='Add this value to all forecasts (--multiply is done before --add)')
+   parser.add_argument('--debug', help='Display debug information', action="store_true")
+
+   if len(sys.argv) == 1:
+      parser.print_help()
+      sys.exit(1)
+
+   args = parser.parse_args()
+   input = read_titan(args.file)
+   if args.variable not in input:
+      verif.util.error("'%s' does not exist in '%s'" % (args.variable, args.file))
+
+   output = verif.input.Netcdf(args.ofilename)
+   locations = output.locations
+
+   """
+   Find the time and leadtime in output to write data to
+   """
+   leadtimes = output.leadtimes
+   assert(len(leadtimes) == 1)
+   assert(leadtimes[0] == 0)
+   times = output.times
+   Itime = np.where(times == verif.util.date_to_unixtime(args.date) + args.hour * 3600)[0]
+   Ileadtime = 0
+   if len(Itime) != 1:
+      verif.util.error("Output file '%s' does not contain date and time" % args.ofilename)
+
+   fcst = output.fcst
+   if args.clear:
+      fcst[:] = np.nan
+
+   """
+   Compute nearest neighbours
+   """
+   lat = input["lat"]
+   lon = input["lon"]
+   proj = pyproj.Proj(args.proj)
+   x, y = proj(lon, lat)
+
+   if is_number(args.aggregator):
+      func = verif.aggregator.Quantile(float(args.aggregator))
+   else:
+      func = verif.aggregator.get(args.aggregator)
+
+   coords = np.zeros([len(x.flatten()), 2])
+   coords[:, 0] = x
+   coords[:, 1] = y
+   nn_tree = scipy.spatial.KDTree(coords)
+   for s in range(len(locations)):
+      currlat = locations[s].lat
+      currlon = locations[s].lon
+      xx, yy = proj(currlon, currlat)
+      I = nn_tree.query_ball_point([xx, yy], args.radius * 1000)
+      vals = input[args.variable][I]
+      vals = vals[np.isnan(vals) == 0]
+      if len(vals) > args.min_num:
+         fcst[Itime, Ileadtime, s] = func(vals)
+
+   # Write output
+   output = netCDF4.Dataset(args.ofilename, 'a')
+   output.variables["fcst"][:] = fcst[:]
+   if args.units is not None:
+      output.Units = args.units
+   output.close()
+
+
+def read_titan(ifilename):
+   file = open(ifilename)
+   values = dict()
+   header = None
+
+   for line in file:
+      if header is None:
+         header = [word for word in line.strip().split(';') if word != '']
+         for word in header:
+            values[word] = list()
+         continue
+      curr = line.strip().split(';')
+      for i, col in enumerate(header):
+         val = curr[i]
+         if val == "NA":
+            val = -999
+         else:
+            val = float(val)
+         values[col] += [val]
+
+   for col in header:
+      values[col] = np.array(values[col])
+
+   file.close()
+   return values
+
+
+def is_number(s):
+   try:
+      float(s)
+      return True
+   except ValueError:
+      return False
+
+
+if __name__ == "__main__":
+   main()
