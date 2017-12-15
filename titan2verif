@@ -64,6 +64,11 @@ def main():
    """
    Compute nearest neighbours
    """
+   if "dqc" in input:
+      qc = input["dqc"]
+      I = np.where(qc == 0)[0]
+      for key in input:
+         input[key] = input[key][I]
    lat = input["lat"]
    lon = input["lon"]
    proj = pyproj.Proj(args.proj)
@@ -110,10 +115,10 @@ def read_titan(ifilename):
       curr = line.strip().split(';')
       for i, col in enumerate(header):
          val = curr[i]
-         if val == "NA":
-            val = -999
-         else:
+         if is_number(val):
             val = float(val)
+         else:
+            val = -999
          values[col] += [val]
 
    for col in header:
