@@ -15,24 +15,25 @@ import pyproj
 
 
 def main():
-   parser = argparse.ArgumentParser(description='Verifies output from Titan against trusted observations')
-   parser.add_argument('file', help='Input file from titan')
-   parser.add_argument('-o', help='Verif file', dest="ofilename", required=True)
-   parser.add_argument('-d', type=int, help='Date of input file in YYYYMMDD', dest='date', required=True)
-   parser.add_argument('-i', type=float, help='Time of day of input file in HH', dest='hour', required=True)
-   parser.add_argument('-r', type=float, default=5, help='Radius of neighbourhood in km', dest='radius')
-   parser.add_argument('-mn', type=int, default=3, help='Minimum number of stations required', dest='min_num')
-   parser.add_argument('-a', default="median", help='Aggregator (one of mean, median, min, max, or a number to specify a quantile)', dest='aggregator')
-   parser.add_argument('-l', type=verif.util.parse_numbers, help='Which output locations to process', dest='locations')
-   parser.add_argument('-ed', default=100, type=int, help='Min elevation difference', dest='min_elev_diff')
-   parser.add_argument('-proj', default="+proj=lcc +lat_0=63 +lon_0=15 +lat_1=63 +lat_2=63 +no_defs +R=6.371e+06", help='Projection for distances', dest='proj')
-   parser.add_argument('-u', help='Units', dest="units")
-   parser.add_argument('-v', default="value", help='What variable to show?', dest="variable")
-   parser.add_argument('-c', help='Clear forecasts in output file', dest='clear', action="store_true")
-   parser.add_argument('--multiply', type=float, default=1, help='Multiply all forecasts with this value')
-   parser.add_argument('--add', type=float, default=0, help='Add this value to all forecasts (--multiply is done before --add)')
-   parser.add_argument('--debug', help='Display debug information', action="store_true")
-   parser.add_argument('-k', type=verif.util.parse_numbers, help='If the file has a dqc column, only keep rows with these DQC flags', dest="keep")
+   parser = argparse.ArgumentParser(description='A script to verify Titan output against trusted observations. The script aggregates the Titan observations in space and add it to an existing verif file. The verif file must already contain the verifying observations and this script will create "forecasts" for these locations.', add_help=False)
+   parser.add_argument('file', help='Input text file from Titan')
+   file = parser.add_argument_group('file options')
+   file.add_argument('-o', help='Verif file', dest="ofilename", required=True)
+   file.add_argument('-d', type=int, help='Date of input file in YYYYMMDD. Used to figure out where in the output file to write the "forecast".', dest='date', required=True)
+   file.add_argument('-i', type=float, help='Time of day of input file in HH', dest='hour', required=True)
+   file.add_argument('-v', metavar="COLUMN", default="value", help="What column from the file to show? If 'num', then show the number of total values.", dest="variable")
+   file.add_argument('-c', help='Erase all forecasts in output file before adding values', dest='clear', action="store_true")
+   file.add_argument('--multiply', metavar="FACTOR", type=float, default=1, help='Multiply all forecasts with this value')
+   file.add_argument('--add', metavar="VALUE", type=float, default=0, help='Add this value to all forecasts (--multiply is done before --add)')
+   file.add_argument('-k', metavar="FLAGS", type=verif.util.parse_numbers, help='If the file has a dqc column, only keep rows with these DQC flags. Comma-separated list accepted.', dest="keep")
+   file.add_argument('-u', help='Write this to the units attribute in the output file.', dest="units")
+   file.add_argument('--debug', help='Display debug information', action="store_true")
+   agg = parser.add_argument_group('aggregation options', description='These options affect how the aggregated "forecast" is made.')
+   agg.add_argument('-a', default="median", help='Function to aggregating observations. One of mean, median, min, max, or a number to specify a quantile.', dest='aggregator')
+   agg.add_argument('-ed', metavar="HEIGHT", default=100, type=int, help='Use stations that are within this elevation difference', dest='min_elev_diff')
+   agg.add_argument('-r', type=float, default=5, help='Radius of neighbourhood in km', dest='radius')
+   agg.add_argument('-mn', metavar="NUM", type=int, default=3, help='Minimum number of stations required to create a "forecast"', dest='min_num')
+   agg.add_argument('-proj', default="+proj=lcc +lat_0=63 +lon_0=15 +lat_1=63 +lat_2=63 +no_defs +R=6.371e+06", help='Projection to compute distances between stations', dest='proj')
 
    if len(sys.argv) == 1:
       parser.print_help()
@@ -40,7 +41,7 @@ def main():
 
    args = parser.parse_args()
    input = read_titan(args.file)
-   if args.variable not in input:
+   if args.variable != "num" and args.variable not in input:
       verif.util.error("'%s' does not exist in '%s'" % (args.variable, args.file))
 
    output = verif.input.Netcdf(args.ofilename)
@@ -94,10 +95,13 @@ def main():
       currlon = locations[s].lon
       xx, yy = proj(currlon, currlat)
       I = nn_tree.query_ball_point([xx, yy], args.radius * 1000)
-      vals = input[args.variable][I]
-      vals = vals[np.isnan(vals) == 0]
-      if len(vals) > args.min_num:
-         fcst[Itime, Ileadtime, s] = func(vals)
+      if args.variable == "num":
+         fcst[Itime, Ileadtime, s] = len(I)
+      else:
+         vals = input[args.variable][I]
+         vals = vals[np.isnan(vals) == 0]
+         if len(vals) > args.min_num:
+            fcst[Itime, Ileadtime, s] = func(vals)
 
    # Write output
    output = netCDF4.Dataset(args.ofilename, 'a')
