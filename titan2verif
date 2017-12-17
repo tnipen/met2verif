@@ -32,6 +32,7 @@ def main():
    parser.add_argument('--multiply', type=float, default=1, help='Multiply all forecasts with this value')
    parser.add_argument('--add', type=float, default=0, help='Add this value to all forecasts (--multiply is done before --add)')
    parser.add_argument('--debug', help='Display debug information', action="store_true")
+   parser.add_argument('-k', type=verif.util.parse_numbers, help='If the file has a dqc column, only keep rows with these DQC flags', dest="keep")
 
    if len(sys.argv) == 1:
       parser.print_help()
@@ -64,11 +65,16 @@ def main():
    """
    Compute nearest neighbours
    """
-   if "dqc" in input:
+   if "dqc" in input and args.keep is not None:
       qc = input["dqc"]
-      I = np.where(qc == 0)[0]
+      num_before = len(qc)
+      I = np.array([], 'int')
+      for flag in args.keep:
+         I = np.append(I, np.where(qc == flag)[0])
       for key in input:
          input[key] = input[key][I]
+      num_removed = num_before - len(I)
+      print "Number of values removed: %d" % num_removed
    lat = input["lat"]
    lon = input["lon"]
    proj = pyproj.Proj(args.proj)
