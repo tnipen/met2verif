@@ -10,11 +10,18 @@ import scipy.interpolate
 import datetime
 
 if(len(sys.argv) < 2):
-   print "minimizeverif.py <verifFile>"
+   print "usage: minimizeverif.py <verifFile> [<outputFile>]"
+   print ""
+   print "Reduces the size of a verify file by removing dates,"
+   print "leadtimes, and locations that do not have any data."
    sys.exit()
 
 verifFilename = sys.argv[1]
-newFilename = sys.argv[2]
+if len(sys.argv) == 2:
+   newFilename = verifFilename.split('.')
+   newFilename = '.'.join(newFilename[0:-1]) + '.'.join(['_min', newFilename[-1]])
+else:
+   newFilename = sys.argv[2]
 
 assert(newFilename != verifFilename)
 
