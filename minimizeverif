@@ -16,16 +16,16 @@ if(len(sys.argv) < 2):
 verifFilename = sys.argv[1]
 newFilename = sys.argv[2]
 
-print "starting"
+assert(newFilename != verifFilename)
 
-ifile = verif.input.NetcdfCf(verifFilename)
+ifile = verif.input.Netcdf(verifFilename)
 locations = ifile.locations
-locationids = [loc.id for loc in locations]
-offsets  = ifile.offsets
+locationids = np.array([loc.id for loc in locations])
+offsets  = ifile.leadtimes
 times    = ifile.times
-lats     = [loc.lat for loc in locations]
-lons     = [loc.lon for loc in locations]
-elevs    = [loc.elev for loc in locations]
+lats     = np.array([loc.lat for loc in locations])
+lons     = np.array([loc.lon for loc in locations])
+elevs    = np.array([loc.elev for loc in locations])
 
 fcst = verif.util.clean(ifile.fcst)
 obs  = verif.util.clean(ifile.obs)
@@ -54,19 +54,25 @@ Ilocations = np.where(valid == 1)[0]
 print Ioffsets, Itimes, Ilocations
 
 file = netcdf(newFilename, 'w', format="NETCDF4")
-file.createDimension("lead_time", len(Ioffsets))
+file.createDimension("leadtime", len(Ioffsets))
 file.createDimension("time", None)
 file.createDimension("location", len(Ilocations))
 vTime=file.createVariable("time", "i4", ("time",))
-vOffset=file.createVariable("lead_time", "f4", ("lead_time",))
-vLocation=file.createVariable("id", "f8", ("location",))
+vOffset=file.createVariable("leadtime", "f4", ("leadtime",))
+vLocation=file.createVariable("location", "f8", ("location",))
 vLat=file.createVariable("lat", "f4", ("location",))
 vLon=file.createVariable("lon", "f4", ("location",))
 vElev=file.createVariable("altitude", "f4", ("location",))
-vfcst=file.createVariable("fcst", "f4", ("time", "lead_time", "location"))
-vobs=file.createVariable("obs", "f4", ("time", "lead_time", "location"))
-file.Variable = ifile.variable.name
-file.Units = ifile.variable.units
+vfcst=file.createVariable("fcst", "f4", ("time", "leadtime", "location"))
+vobs=file.createVariable("obs", "f4", ("time", "leadtime", "location"))
+ifile_nc = netcdf(verifFilename, 'r')
+if hasattr(ifile_nc, "standard_name"):
+    file.standard_name = ifile_nc.standard_name
+if hasattr(ifile_nc, "Variable"):
+    file.Variable = ifile_nc.Variable
+if hasattr(ifile_nc, "units"):
+    file.units = ifile_nc.units
+file.Conventions = "verif_1.0.0"
 fcst = fcst[Itimes,:,:]
 fcst = fcst[:,Ioffsets,:]
 fcst = fcst[:,:,Ilocations]
