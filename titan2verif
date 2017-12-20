@@ -78,6 +78,7 @@ def main():
       print "Number of values removed: %d" % num_removed
    lat = input["lat"]
    lon = input["lon"]
+   elev = input["elev"]
    proj = pyproj.Proj(args.proj)
    x, y = proj(lon, lat)
 
@@ -93,8 +94,16 @@ def main():
    for s in range(len(locations)):
       currlat = locations[s].lat
       currlon = locations[s].lon
+      currelev = locations[s].elev
       xx, yy = proj(currlon, currlat)
-      I = nn_tree.query_ball_point([xx, yy], args.radius * 1000)
+
+      I = np.array(nn_tree.query_ball_point([xx, yy], args.radius * 1000), 'int')
+
+      # Remove stations outside elevation difference
+      if args.min_elev_diff is not None:
+         II = np.where(np.abs(currelev - elev[I]) < args.min_elev_diff)[0]
+         I = I[II]
+
       if args.variable == "num":
          fcst[Itime, Ileadtime, s] = len(I)
       else:
